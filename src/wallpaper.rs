@@ -28,7 +28,7 @@ pub fn set(path: impl AsRef<Path>, user_command: Option<&str>) -> Result<()> {
                 // Ubuntu don't be special for no reason challenge (impossible)
                 "GNOME" | "ubuntu:GNOME" => set_gnome(path)?,
                 "KDE" => set_kde(path)?,
-                _ => panic!("Desktop {desktop} is not supported."),
+                _ => log::warn!("Desktop {desktop} is not supported, can not set wallpaper."),
             }
         }
         "windows" => {
@@ -37,7 +37,7 @@ pub fn set(path: impl AsRef<Path>, user_command: Option<&str>) -> Result<()> {
         "macos" => {
             set_mac(path)?;
         }
-        _ => panic!("Operating system not supported."),
+        _ => log::warn!("Operating system not supported, can not set wallpaper."),
     }
 
     Ok(())
