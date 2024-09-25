@@ -1,29 +1,32 @@
 {
-  description = "A very basic flake";
+  description = "A fork of satpaper, actually sane.";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    naersk.url = "github:nix-community/naersk";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, naersk, rust-overlay }: 
-  let 
-    system = "x86_64-linux";
-    pkgs = (import nixpkgs) {
-      inherit system;
-      overlays = [ (import rust-overlay) ];
-    };
-    naersk' = pkgs.callPackage naersk {};
-  in rec {
-    packages.${system}.satpaper = naersk'.buildPackage {
-      src = ./.;
-      
-    };
-    defaultPackage.${system} = packages.${system}.satpaper;
-    devShell.${system} = pkgs.mkShell {
-      nativeBuildInputs = with pkgs; [ rust-bin.nightly.latest.default ];
-    };
-
+  outputs = {
+    self,
+    nixpkgs,
+    rust-overlay,
+  }: let
+    systems = ["x86_64-linux" "aarch64-linux"];
+    forEachSystem = nixpkgs.lib.genAttrs systems;
+    pkgsForEach = nixpkgs.legacyPackages;
+  in {
+    packages = forEachSystem (system: rec {
+      rust-bin =
+        (pkgsForEach.${system}.extend rust-overlay.overlays.default).rust-bin;
+      default = pkgsForEach.${system}.callPackage ./nix/package.nix {inherit rust-bin;};
+    });
+    devShells = forEachSystem (system: rec {
+      rust-bin =
+        (pkgsForEach.${system}.extend rust-overlay.overlays.default).rust-bin;
+      default = pkgsForEach.${system}.callPackage ./nix/shell.nix {inherit rust-bin;};
+    });
   };
 }
