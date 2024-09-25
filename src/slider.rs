@@ -2,7 +2,7 @@ use std::sync::{PoisonError, OnceLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, Context};
-use image::{imageops, GenericImage, GenericImageView, ImageBuffer, Pixel, PixelWithColorType, RgbImage};
+use image::{imageops, ImageBuffer, RgbImage};
 use rayon::prelude::*;
 use serde::{Deserialize, de};
 
@@ -73,7 +73,7 @@ fn download(config: &Config) -> Result<RgbImage> {
             let dec = png::Decoder::new(reader);
             let mut reader = dec.read_info()?;
             let mut buf = config.satellite.tile_image();
-            let info = reader.next_frame(unsafe { &mut buf })?;
+            let info = reader.next_frame(&mut buf)?;
             debug_assert!(matches!(info.color_type, png::ColorType::Rgb));
             let buf = imageops::resize(&buf, tile_size, tile_size, imageops::FilterType::Lanczos3);
 
@@ -106,9 +106,8 @@ fn composite(config: &Config, source: RgbImage) -> Result<()> {
         static BG: OnceLock<RgbImage> = OnceLock::new();
 
         let mut bg = BG.get_or_try_init(|| {
-            use image::io::Reader;
 
-            let mut image = Reader::open(path)
+            let mut image = image::ImageReader::open(path)
                 .context("Failed to open background image at path {path:?}")?
                 .decode()
                 .context("Failed to load background image - corrupt or unsupported?")?
@@ -153,11 +152,14 @@ fn composite(config: &Config, source: RgbImage) -> Result<()> {
     
     log::info!("Compositing complete.");
 
-    composite.save(
+    let save_result = composite.save(
         config.target_path.join(OUTPUT_NAME)
     );
 
-    log::info!("Output saved.");
+    match save_result {
+        Ok(_) => log::info!("Output saved."),
+        Err(err) => log::error!("Unable to save composited image: {err}")
+    }
 
     Ok(())
 }
