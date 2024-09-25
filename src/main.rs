@@ -62,7 +62,7 @@ fn update_wallpaper() -> Result<()> {
                     config.wallpaper_command.as_deref(),
                 )?;
 
-                log::info!("New wallpaper composited and set.");
+                log::info!("New wallpaper composited.");
             }
         }
 
