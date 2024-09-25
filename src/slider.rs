@@ -2,7 +2,7 @@ use std::sync::{PoisonError, OnceLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, Context};
-use fimg::{OverlayAt, Image as Img, scale::Lanczos3};
+use image::{imageops, GenericImage, GenericImageView, ImageBuffer, Pixel, PixelWithColorType, RgbImage};
 use rayon::prelude::*;
 use serde::{Deserialize, de};
 
@@ -13,8 +13,6 @@ use super::{
     OUTPUT_NAME
 };
 
-/// rgb all the way down
-pub type Image<T> = Img<T, 3>;
 
 const SLIDER_BASE_URL: &str = "https://rammb-slider.cira.colostate.edu";
 const SLIDER_SECTOR: &str = "full_disk";
@@ -32,7 +30,7 @@ pub fn composite_latest_image(config: &Config) -> Result<bool> {
         })
 }
 
-fn download(config: &Config) -> Result<Image<Box<[u8]>>> {
+fn download(config: &Config) -> Result<RgbImage> {
     let tile_count = config.satellite.tile_count();
 
     let agent = AgentBuilder::new()
@@ -75,9 +73,9 @@ fn download(config: &Config) -> Result<Image<Box<[u8]>>> {
             let dec = png::Decoder::new(reader);
             let mut reader = dec.read_info()?;
             let mut buf = config.satellite.tile_image();
-            let info = reader.next_frame(unsafe { buf.buffer_mut() })?;
+            let info = reader.next_frame(unsafe { &mut buf })?;
             debug_assert!(matches!(info.color_type, png::ColorType::Rgb));
-            let buf = buf.scale::<Lanczos3>(tile_size, tile_size);
+            let buf = imageops::resize(&buf, tile_size, tile_size, imageops::FilterType::Lanczos3);
 
             log::info!(
                 "Finished scraping tile at ({x}, {y}). Size: {:.2}KiB",
@@ -88,45 +86,42 @@ fn download(config: &Config) -> Result<Image<Box<[u8]>>> {
         });
     
     log::info!("Stitching tiles...");
-    let stitched = Mutex::new(Image::alloc(disk_dim, disk_dim).boxed());
+    let stitched = Mutex::new(ImageBuffer::new(disk_dim, disk_dim));
     tiles.try_for_each(|a|{
         let (y, x, buf) = a?;
-        // yes, this is possible lockless.
-        // no, i will not do it.
-        // if you do it, construct a sendable pointer, then exclusively use .add and slice::from_raw_parts(_mut)
-        // SAFETY: tiles iterates over the number of tiles, each tile == tile_size, `stitched` is a image of tile_size * tile_count.
-        unsafe { stitched.lock().unwrap_or_else(PoisonError::into_inner).overlay_at(&buf, x * tile_size, y * tile_size) };        
+        let mut image = stitched.lock().unwrap_or_else(PoisonError::into_inner);
+        imageops::overlay(&mut *image, &buf, x.into(), y.into());
         anyhow::Ok(())
     })?;
 
     Ok(stitched.into_inner().unwrap())
 }
 
-fn composite(config: &Config, source: Image<Box<[u8]>>) -> Result<()> {
+fn composite(config: &Config, source: RgbImage) -> Result<()> {
     log::info!("Compositing...");
 
     let disk_dim = config.disk();
 
     let composite = if let Some(path) = &config.background_image {
-        static BG: OnceLock<Image<Box<[u8]>>> = OnceLock::new();
+        static BG: OnceLock<RgbImage> = OnceLock::new();
 
         let mut bg = BG.get_or_try_init(|| {
             use image::io::Reader;
 
-            let image = Reader::open(path)
+            let mut image = Reader::open(path)
                 .context("Failed to open background image at path {path:?}")?
                 .decode()
                 .context("Failed to load background image - corrupt or unsupported?")?
                 .into_rgb8();
 
-            let mut image = Image::build(image.width(), image.height()).buf(image.into_vec().into_boxed_slice());
+            // let mut image = Image::build(image.width(), image.height()).buf(image.into_vec().into_boxed_slice());
 
             if image.width() != config.resolution_x || 
                image.height() != config.resolution_y 
             {
                 log::info!("Resizing background image to fit...");
 
-                image = image.scale::<Lanczos3>(config.resolution_x, config.resolution_y);
+                image = imageops::resize(&image, config.resolution_x, config.resolution_y, imageops::FilterType::Lanczos3);
             }
 
             anyhow::Ok(image)
@@ -135,8 +130,8 @@ fn composite(config: &Config, source: Image<Box<[u8]>>) -> Result<()> {
         log::info!("Compositing source into destination...");
 
         cutout_disk(
-            bg.as_mut(),
-            source.as_ref(),
+            &mut bg,
+            source.into(),
             (config.resolution_x - disk_dim) / 2,
             (config.resolution_y - disk_dim) / 2
         );
@@ -144,15 +139,14 @@ fn composite(config: &Config, source: Image<Box<[u8]>>) -> Result<()> {
         bg
     }
     else {
-        let mut behind = Image::alloc(config.resolution_x, config.resolution_y).boxed();
+        let mut behind = RgbImage::new(config.resolution_x, config.resolution_y);
 
-        unsafe { 
-            behind.overlay_at(
-                &source,
-                (config.resolution_x - disk_dim) / 2,
-                (config.resolution_y - disk_dim) / 2,
-            ) 
-        };
+        imageops::overlay(
+            &mut behind,
+            &source,
+            ((config.resolution_x - disk_dim) / 2).into(),
+            ((config.resolution_y - disk_dim) / 2).into(),
+        ); 
 
         behind
     };
@@ -168,7 +162,6 @@ fn composite(config: &Config, source: Image<Box<[u8]>>) -> Result<()> {
     Ok(())
 }
 
-const BLACK: [u8; 3] = [4; 3];
 
 #[derive(Clone, Copy, Debug)]
 enum Direction {
@@ -176,10 +169,12 @@ enum Direction {
     Right
 }
 
+const BLACK: u8 = 4; // cutoff for the background
+
 // Identifies the bounds of the Earth in the image
 fn cutout_disk(
-    mut bg: Image<&mut [u8]>,
-    earth: Image<&[u8]>,
+    bg: &mut RgbImage,
+    earth: RgbImage,
     offset_x: u32,
     offset_y: u32
 ) {
@@ -204,8 +199,8 @@ fn cutout_disk(
         log::debug!("Performing cutout march for direction {direction:?}...");
 
         loop {
-            // SAFETY: march
-            if unsafe { earth.pixel(x, y) } > BLACK {
+            let [r, g, b] = earth.get_pixel(x, y).0;
+            if  r > BLACK && g > BLACK && b > BLACK {
                 log::debug!("Found disk bounds at {x}, {y}.");
                 break x
             };
@@ -244,7 +239,8 @@ fn cutout_disk(
         for y in 0..earth.height() {
             if inside(x)(y) {
                 // overlay the earth
-                unsafe { bg.set_pixel(offset_x + x, offset_y + y, earth.pixel(x, y)) };
+                let pixel = bg.get_pixel_mut(offset_x + x, offset_y + y);
+                *pixel = *earth.get_pixel(x, y);
             }
         }
     }

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use fimg::Image;
+use image::RgbImage;
+// use fimg::Image;
 
 #[derive(Debug, Clone, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -102,8 +103,8 @@ impl Satellite {
         }
     }
 
-    pub fn tile_image(self) -> Image<Box<[u8]>, 3> {
-        Image::alloc(self.tile_size(), self.tile_size()).boxed()
+    pub fn tile_image(self) -> RgbImage {
+        RgbImage::new(self.tile_size(), self.tile_size())
     }
 
     pub fn tile_count(self) -> u32 {

@@ -22,8 +22,8 @@ env_logger = "0.11.3"
 clap = { version = "4.5.3", features = ["derive", "env"] }
 
 # Compositing
-image = { version = "0.25.0", features = ["jpeg", "gif", "png", "pnm", "qoi", "tga", "tiff", "webp", "bmp", "dds"], default-features = false }
-fimg = "0.4.41"
+image = { version = "0.25.2", features = ["jpeg", "gif", "png", "pnm", "qoi", "tga", "tiff", "webp", "bmp", "dds"], default-features = false }
+# fimg = "0.4.41"
 png = "0.17.13"
 
 # Scraping
