@@ -78,8 +78,8 @@ fn download(config: &Config) -> Result<RgbImage> {
             let buf = imageops::resize(&buf, tile_size, tile_size, imageops::FilterType::Lanczos3);
 
             log::info!(
-                "Finished scraping tile at ({x}, {y}). Size: {:.2}KiB",
-                len as f32 / 1024.0
+                "Finished scraping tile at ({x}, {y}). Size: {}KiB",
+                len >> 10
             );
 
             Ok((x, y, buf))
@@ -90,7 +90,7 @@ fn download(config: &Config) -> Result<RgbImage> {
     tiles.try_for_each(|a|{
         let (y, x, buf) = a?;
         let mut image = stitched.lock().unwrap_or_else(PoisonError::into_inner);
-        imageops::overlay(&mut *image, &buf, x.into(), y.into());
+        imageops::overlay(&mut *image, &buf, (x * tile_size).into(), (y * tile_size).into());
         anyhow::Ok(())
     })?;
 
